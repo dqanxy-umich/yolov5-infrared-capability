@@ -107,7 +107,7 @@ def train(hyp, opt, device, callbacks):
 
     `hyp` argument is path/to/hyp.yaml or hyp dictionary.
     """
-    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze = (
+    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze, ch = (
         Path(opt.save_dir),
         opt.epochs,
         opt.batch_size,
@@ -121,6 +121,7 @@ def train(hyp, opt, device, callbacks):
         opt.nosave,
         opt.workers,
         opt.freeze,
+        opt.ch
     )
     callbacks.run("on_pretrain_routine_start")
 
@@ -186,14 +187,15 @@ def train(hyp, opt, device, callbacks):
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
         ckpt = torch.load(weights, map_location="cpu")  # load checkpoint to CPU to avoid CUDA memory leak
-        model = Model(cfg or ckpt["model"].yaml, ch=3, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
+        model = Model(cfg or ckpt["model"].yaml, ch=ch, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
+        print("Test")
         exclude = ["anchor"] if (cfg or hyp.get("anchors")) and not resume else []  # exclude keys
         csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
         csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(csd, strict=False)  # load
         LOGGER.info(f"Transferred {len(csd)}/{len(model.state_dict())} items from {weights}")  # report
     else:
-        model = Model(cfg, ch=3, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
+        model = Model(cfg, ch=ch, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
     amp = check_amp(model)  # check AMP
 
     # Freeze
@@ -249,7 +251,7 @@ def train(hyp, opt, device, callbacks):
     if opt.sync_bn and cuda and RANK != -1:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
         LOGGER.info("Using SyncBatchNorm()")
-
+    print("Creating DataLoader")
     # Trainloader
     train_loader, dataset = create_dataloader(
         train_path,
@@ -258,21 +260,24 @@ def train(hyp, opt, device, callbacks):
         gs,
         single_cls,
         hyp=hyp,
-        augment=True,
+        augment=False,
         cache=None if opt.cache == "val" else opt.cache,
         rect=opt.rect,
         rank=LOCAL_RANK,
-        workers=workers,
+        workers=0,
         image_weights=opt.image_weights,
         quad=opt.quad,
         prefix=colorstr("train: "),
         shuffle=True,
         seed=opt.seed,
+        infrared=ch>3,
     )
+    print("Finished Dataloader")
     labels = np.concatenate(dataset.labels, 0)
     mlc = int(labels[:, 0].max())  # max label class
     assert mlc < nc, f"Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}"
 
+    print("Test 0")
     # Process 0
     if RANK in {-1, 0}:
         val_loader = create_dataloader(
@@ -285,7 +290,7 @@ def train(hyp, opt, device, callbacks):
             cache=None if noval else opt.cache,
             rect=True,
             rank=-1,
-            workers=workers * 2,
+            workers=0,
             pad=0.5,
             prefix=colorstr("val: "),
         )[0]
@@ -297,6 +302,7 @@ def train(hyp, opt, device, callbacks):
 
         callbacks.run("on_pretrain_routine_end", labels, names)
 
+    print("Test 1")
     # DDP mode
     if cuda and RANK != -1:
         model = smart_DDP(model)
@@ -313,6 +319,7 @@ def train(hyp, opt, device, callbacks):
     model.names = names
 
     # Start training
+    print("Test 2")
     t0 = time.time()
     nb = len(train_loader)  # number of batches
     nw = max(round(hyp["warmup_epochs"] * nb), 100)  # number of warmup iterations, max(3 epochs, 100 iterations)
@@ -379,6 +386,7 @@ def train(hyp, opt, device, callbacks):
 
             # Forward
             with torch.cuda.amp.autocast(amp):
+                print(imgs.shape)
                 pred = model(imgs)  # forward
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
                 if RANK != -1:
@@ -515,6 +523,7 @@ def parse_opt(known=False):
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", type=str, default=ROOT / "yolov5s.pt", help="initial weights path")
     parser.add_argument("--cfg", type=str, default="", help="model.yaml path")
+    parser.add_argument("--ch", type=int, default=3, help="number of channels, 3 for RGB, 4 to include infrared, etc.")
     parser.add_argument("--data", type=str, default=ROOT / "data/coco128.yaml", help="dataset.yaml path")
     parser.add_argument("--hyp", type=str, default=ROOT / "data/hyps/hyp.scratch-low.yaml", help="hyperparameters path")
     parser.add_argument("--epochs", type=int, default=100, help="total training epochs")

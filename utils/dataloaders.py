@@ -167,12 +167,13 @@ def create_dataloader(
     pad=0.0,
     rect=False,
     rank=-1,
-    workers=8,
+    workers=1,
     image_weights=False,
     quad=False,
     prefix="",
     shuffle=False,
     seed=0,
+    infrared=False,
 ):
     if rect and shuffle:
         LOGGER.warning("WARNING ⚠️ --rect is incompatible with DataLoader shuffle, setting shuffle=False")
@@ -192,6 +193,7 @@ def create_dataloader(
             image_weights=image_weights,
             prefix=prefix,
             rank=rank,
+            include_infrared=infrared
         )
 
     batch_size = min(batch_size, len(dataset))
@@ -205,7 +207,7 @@ def create_dataloader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle and sampler is None,
-        num_workers=nw,
+        num_workers=0,
         sampler=sampler,
         pin_memory=PIN_MEMORY,
         collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn,
@@ -551,6 +553,7 @@ class LoadImagesAndLabels(Dataset):
         prefix="",
         rank=-1,
         seed=0,
+        include_infrared=False,
     ):
         self.img_size = img_size
         self.augment = augment
@@ -562,6 +565,8 @@ class LoadImagesAndLabels(Dataset):
         self.stride = stride
         self.path = path
         self.albumentations = Albumentations(size=img_size) if augment else None
+        self.infrared = include_infrared
+        print("Infrared: "+str(include_infrared))
 
         try:
             f = []  # image files
@@ -854,7 +859,10 @@ class LoadImagesAndLabels(Dataset):
                 im = np.load(fn)
             else:  # read image
                 im = cv2.imread(f)  # BGR
+                if self.infrared:
+                    im = np.append(im,np.ones((im.shape[0],im.shape[1],1)),axis=2) #Temp infrared channel, load from image later
                 assert im is not None, f"Image Not Found {f}"
+            
             h0, w0 = im.shape[:2]  # orig hw
             r = self.img_size / max(h0, w0)  # ratio
             if r != 1:  # if sizes are not equal
