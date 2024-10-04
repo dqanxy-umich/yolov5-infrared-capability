@@ -854,13 +854,35 @@ class LoadImagesAndLabels(Dataset):
             self.im_files[i],
             self.npy_files[i],
         )
+        #TODO: replace
+        ir_base_path = "C:\\Users\\dt800\\Downloads\\ir\\"
+        use_roboflow = True
+
         if im is None:  # not cached in RAM
             if fn.exists():  # load npy
                 im = np.load(fn)
             else:  # read image
                 im = cv2.imread(f)  # BGR
                 if self.infrared:
-                    im = np.append(im,np.ones((im.shape[0],im.shape[1],1)),axis=2) #Temp infrared channel, load from image later
+                    #print(f)
+                    ir_suffix = f[0:f.find(".rf.")]
+                    ir_suffix = ir_suffix[ir_suffix.rfind("\\")+1:]
+                    #TODO bad
+                    ir_suffix = ir_suffix.replace("color", "infrared")
+                    ir_suffix = ir_suffix[:-4] + '.' + ir_suffix[-3:]
+                    if "infrared" in ir_suffix:
+                        print(ir_base_path+ir_suffix)
+                    #print(ir_base_path+ir_suffix)
+                    if os.path.exists(ir_base_path + ir_suffix):
+                        im_ir = np.mean(cv2.resize(cv2.imread(ir_base_path+ir_suffix),(im.shape[1],im.shape[0])), axis = 2)[..., np.newaxis]
+                        print(im_ir.shape)
+                        #TODO: test for reshape
+                        im = np.append(im,im_ir,axis=2) #Load from image
+                        #im = np.append(im,np.ones((im.shape[0],im.shape[1],1)),axis=2)
+                        #print(im)
+                    else:
+                        #Roboflow
+                        im = np.append(im,np.ones((im.shape[0],im.shape[1],1)),axis=2) #Temp infrared channel, load from image later
                 assert im is not None, f"Image Not Found {f}"
             
             h0, w0 = im.shape[:2]  # orig hw

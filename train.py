@@ -186,17 +186,24 @@ def train(hyp, opt, device, callbacks):
     if pretrained:
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
+        from pprint import pprint
         ckpt = torch.load(weights, map_location="cpu")  # load checkpoint to CPU to avoid CUDA memory leak
+        pprint(vars(ckpt["model"]._modules))
         model = Model(cfg or ckpt["model"].yaml, ch=ch, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
         print("Test")
         exclude = ["anchor"] if (cfg or hyp.get("anchors")) and not resume else []  # exclude keys
         csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
+        #print(csd['model.0.conv.weight'])
+        z = csd['model.0.conv.weight'][:,2:3,:,:].detach().clone()
+        print(z.shape)
+        csd['model.0.conv.weight'] = torch.cat((csd['model.0.conv.weight'],z),1)
         csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(csd, strict=False)  # load
         LOGGER.info(f"Transferred {len(csd)}/{len(model.state_dict())} items from {weights}")  # report
     else:
         model = Model(cfg, ch=ch, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
     amp = check_amp(model)  # check AMP
+
 
     # Freeze
     freeze = [f"model.{x}." for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
@@ -293,6 +300,7 @@ def train(hyp, opt, device, callbacks):
             workers=0,
             pad=0.5,
             prefix=colorstr("val: "),
+            infrared=ch>3,
         )[0]
 
         if not resume:
